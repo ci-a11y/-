@@ -223,6 +223,36 @@
       border-color: rgba(255,90,106,.30);
     }
 
+    /* Audio controls */
+    .audioCtl{
+      display:flex;
+      gap:10px;
+      flex-wrap:wrap;
+      align-items:center;
+    }
+    .slider{
+      display:flex;
+      gap:10px;
+      align-items:center;
+      background:rgba(255,255,255,.07);
+      border:1px solid rgba(255,255,255,.12);
+      border-radius:999px;
+      padding:8px 12px;
+      box-shadow: 0 10px 22px rgba(0,0,0,.22);
+    }
+    .slider label{
+      font-size:12px;
+      color:var(--muted);
+      font-weight:900;
+      letter-spacing:.2px;
+      user-select:none;
+      white-space:nowrap;
+    }
+    input[type="range"]{
+      width:160px;
+      accent-color: var(--gold);
+    }
+
     .qbox{
       padding:16px;
       border-radius:var(--radius);
@@ -392,12 +422,12 @@
       margin-top:12px;
     }
 
-    /* mobile */
     @media (max-width: 920px){
       main{ grid-template-columns: 1fr; }
       .ladder{ display:none; }
       .q{ font-size:18px; }
       .answers{ grid-template-columns: 1fr; }
+      input[type="range"]{ width:140px; }
     }
   </style>
 </head>
@@ -432,6 +462,19 @@
               <button class="btn" id="btnAudience" title="顯示觀眾投票（模擬）" disabled>📣 問觀眾</button>
               <button class="btn" id="btnExpert" title="文化達人提示（半可靠）" disabled>☎️ 問達人</button>
             </div>
+
+            <div class="audioCtl">
+              <button class="btn" id="btnMute" title="靜音/解除靜音">🔊 聲音：開</button>
+              <div class="slider" title="背景音樂音量">
+                <label for="volBgm">BGM</label>
+                <input id="volBgm" type="range" min="0" max="100" value="35" />
+              </div>
+              <div class="slider" title="音效音量">
+                <label for="volSfx">SFX</label>
+                <input id="volSfx" type="range" min="0" max="100" value="90" />
+              </div>
+            </div>
+
             <div class="lifelines">
               <button class="btn primary" id="btnStart">▶️ 開始遊戲</button>
               <button class="btn danger" id="btnReset">↻ 重設</button>
@@ -446,11 +489,9 @@
               <div class="badge"><span class="k">操作</span><span class="v">鍵盤 1–4 ／ 點選</span></div>
             </div>
             <div class="q" id="uiQuestion">按「開始遊戲」進入第 1 關。</div>
-            <div class="hint" id="uiHint">提示：投影使用時可按 F11 全螢幕；手機可直按選項。</div>
+            <div class="hint" id="uiHint">提示：首次播放會因瀏覽器限制，需要你按「開始遊戲」或任何按鈕作解鎖。</div>
 
-            <div class="answers" id="answers">
-              <!-- options injected -->
-            </div>
+            <div class="answers" id="answers"></div>
           </div>
 
           <div class="toast" id="toast">
@@ -467,8 +508,8 @@
     </main>
 
     <footer>
-      <div>題庫：中華文化周（食）｜60 題（15 關×4）｜可自行改題庫文字。</div>
-      <div>快捷鍵：<b>1–4</b> 作答｜<b>Enter</b> 下一步｜<b>R</b> 重設</div>
+      <div>題庫：中華文化周（食）｜60 題（15 關×4）｜音檔放 repo：assets/bgm.mp3 / assets/correct.mp3 / assets/wrong.mp3</div>
+      <div>快捷鍵：<b>1–4</b> 作答｜<b>Enter</b> 下一步｜<b>R</b> 重設｜<b>M</b> 靜音</div>
     </footer>
   </div>
 
@@ -486,110 +527,149 @@
 (() => {
   "use strict";
 
+  // ==========================================================
+  // ✅ 音效／音樂設定（請把音檔放入 repo）
+  //   assets/bgm.mp3
+  //   assets/correct.mp3
+  //   assets/wrong.mp3
+  // ==========================================================
+  const audio = {
+    enabled: true,
+    unlocked: false,
+    bgm: new Audio("assets/bgm.mp3"),
+    ok:  new Audio("assets/correct.mp3"),
+    bad: new Audio("assets/wrong.mp3"),
+    bgmVol: 0.35,
+    sfxVol: 0.90
+  };
+  audio.bgm.loop = true;
+  function applyVolumes(){
+    audio.bgm.volume = audio.enabled ? audio.bgmVol : 0;
+    audio.ok.volume  = audio.enabled ? audio.sfxVol : 0;
+    audio.bad.volume = audio.enabled ? audio.sfxVol : 0;
+  }
+  applyVolumes();
+
+  async function unlockAudio(){
+    if(audio.unlocked) return true;
+    try{
+      // 先以 bgm.play() 解鎖（若被擋，catch）
+      await audio.bgm.play();
+      audio.bgm.pause();
+      audio.bgm.currentTime = 0;
+      audio.unlocked = true;
+      return true;
+    }catch{
+      return false;
+    }
+  }
+
+  async function ensureBgmPlaying(){
+    if(!audio.enabled) return;
+    const ok = await unlockAudio();
+    if(!ok) return; // 仍被瀏覽器阻擋：等下一次用戶按鍵再試
+    audio.bgm.volume = audio.bgmVol;
+    try{ await audio.bgm.play(); }catch{}
+  }
+
+  function stopBgm(){
+    try{ audio.bgm.pause(); }catch{}
+  }
+
+  function playSfx(a){
+    if(!audio.enabled) return;
+    // SFX 不需要 loop；可重播
+    try{ a.currentTime = 0; a.play(); }catch{}
+  }
+
   // =========================
   // 題庫（15 關 × 4 題 = 60）
-  // 每題：q, options[4], answer(0-3), explain
   // =========================
   const BANK = [
-    // Level 1
     [
       { q:"中國人講「色香味俱全」，最重視咩？", options:["食材價格","外觀","整體感官體驗","份量"], answer:2, explain:"中菜講究視覺、氣味、口感與味道的整體配合。" },
       { q:"以下邊一項最能代表中華飲食文化？", options:["個人套餐","分食共享","快速進食","冷凍食品"], answer:1, explain:"同桌分食、共享菜式，是常見餐桌文化。" },
       { q:"團年飯最主要象徵：", options:["食得豐富","家庭團聚","展示廚藝","慶祝假期"], answer:1, explain:"核心係「一齊食」帶來凝聚與團圓意義。" },
       { q:"「食文化」之所以重要，係因為：", options:["人人都要食","食物承載文化與記憶","食物好玩","食物易準備"], answer:1, explain:"飲食連結節慶、家庭、身份與城市記憶。" },
     ],
-    // Level 2
     [
       { q:"中菜常見「先請長輩食」，反映咩價值？", options:["浪費時間","尊重與輩分","形式主義","飲食規矩多"], answer:1, explain:"餐桌秩序反映尊重與人際倫理。" },
       { q:"同桌食飯時幫人夾餸，通常代表：", options:["催促對方","關心與照顧","命令","禮貌錯誤"], answer:1, explain:"夾餸常帶有照顧與維繫關係的意味。" },
       { q:"以下哪一種最符合中華飲食禮儀？", options:["各自低頭食","共食交流","先搶好餸","快食快走"], answer:1, explain:"共食＋交流，是餐桌文化的重要部分。" },
       { q:"筷子文化較常被解讀為反映：", options:["武器用途","分食與節制","方便攜帶","裝飾"], answer:1, explain:"筷子配合分食、夾取與禮儀克制。" },
     ],
-    // Level 3
     [
       { q:"「甜酸苦辣鹹」常用嚟比喻：", options:["天氣","人生經歷","餐單","地理"], answer:1, explain:"味覺詞常被借用去講人生起伏。" },
       { q:"中文裡講「回甘」，多數形容：", options:["食物太甜","味道層次與後韻","食物冷卻","唔好食"], answer:1, explain:"回甘指入口後的層次與尾韻。" },
       { q:"中菜味道配搭常強調：", options:["單一味型","平衡","越濃越好","越辣越好"], answer:1, explain:"常見思路係濃淡相間、互相襯托。" },
       { q:"以下邊個最能反映「味道文化」？", options:["食得快","味型連結文化想像","餐具數量","菜名越長越好"], answer:1, explain:"味型不只口感，亦承載地域與文化理解。" },
     ],
-    // Level 4
     [
       { q:"年糕象徵：", options:["團圓","步步高陞","長壽","平安"], answer:1, explain:"「糕」與「高」諧音，常寓意向上。" },
       { q:"湯圓多數同咩有關？", options:["中秋","團圓","清明","端午"], answer:1, explain:"圓形象徵圓滿與團聚。" },
       { q:"節慶食品主要作用係：", options:["易保存","象徵祝福與儀式感","平日唔食","方便分派"], answer:1, explain:"節慶食品係文化符號，承載祝願。" },
       { q:"食節令食品反映：", options:["價格","與時間和自然配合","地區競爭","飲食潮流"], answer:1, explain:"節令與物產／季節感，構成生活節奏。" },
     ],
-    // Level 5
     [
       { q:"八大菜系主要根據：", options:["廚師名氣","地域與氣候","價錢","皇帝喜好"], answer:1, explain:"地域物產與氣候，長期形塑味型與技法。" },
       { q:"粵菜常被形容「清鮮」，較接近：", options:["重辣","清淡鮮味","重油","重鹹"], answer:1, explain:"粵菜常強調食材新鮮與本味。" },
       { q:"川菜最常見味型係：", options:["清淡","麻辣","甜","酸"], answer:1, explain:"麻辣是川味的重要標誌。" },
       { q:"菜系形成同以下邊樣最有關？", options:["廚房大小","地理環境與物產","餐具","包裝"], answer:1, explain:"地理物產影響食材、保存與烹調。" },
     ],
-    // Level 6
     [
       { q:"川菜常用花椒，除風味外亦常被解釋與咩有關？", options:["好貴","氣候濕熱與生活需要","皇室喜好","保存容易"], answer:1, explain:"地域氣候與生活情境，影響香料使用。" },
       { q:"粵菜較少用濃重香料，較合理原因係：", options:["香料難買","強調食材本味","唔鍾意香","純粹習慣"], answer:1, explain:"粵菜更重視火候與鮮味呈現。" },
       { q:"魯菜常見燉、燜等技法，較貼近：", options:["地理平原與食材耐煮","火力不足","偶然形成","只為省事"], answer:0, explain:"長時間烹調與濃厚湯汁是常見特徵之一。" },
       { q:"菜系差異最能反映中國文化嘅：", options:["單一性","多樣性","封閉性","排他性"], answer:1, explain:"地域多樣帶來飲食多樣。" },
     ],
-    // Level 7
     [
       { q:"「飲茶文化」核心唔只係點心，而係：", options:["食量","社交交流","價錢","裝修"], answer:1, explain:"茶樓是聚會、溝通與人情互動的場域。" },
       { q:"飲食空間（茶樓、酒樓）的社會功能係：", options:["只為用餐","交流與聚會","工作場所","表演場地"], answer:1, explain:"用餐同時承載社交與社區連結。" },
       { q:"以下邊個最能反映香港飲食特色？", options:["純傳統","中西融合","全部創新","完全外來"], answer:1, explain:"香港飲食常見混合與在地改良。" },
       { q:"香港飲食文化形成同咩更有關？", options:["地理位置與歷史背景","人口少","氣候單一","政策限制"], answer:0, explain:"港口城市、流動人口與歷史互動影響明顯。" },
     ],
-    // Level 8
     [
       { q:"茶餐廳文化常被理解為回應：", options:["純粹口味","城市節奏與大眾化需求","食材缺乏","傳統完全消失"], answer:1, explain:"快、平、選擇多，貼近都市生活節奏。" },
       { q:"菜式會隨時代改變，較能反映文化：", options:["不穩定","流動與演變","消失","混亂"], answer:1, explain:"文化會因社會條件改變而調整形式。" },
       { q:"以下邊個係飲食文化變遷例子？", options:["新菜式出現","價錢上升","人口減少","廚具更新"], answer:0, explain:"新菜式反映口味、市場與技術變化。" },
       { q:"傳統菜式改良，常見目的係：", options:["迎合新生活方式","破壞傳統","純粹減成本","只為增加工序"], answer:0, explain:"改良多為適應生活節奏與新口味。" },
     ],
-    // Level 9
     [
       { q:"中華食療講「寒熱」，較多指：", options:["食物溫度","食物性質（概念）","價錢","份量"], answer:1, explain:"寒熱多是傳統概念，用以描述食物性質。" },
       { q:"食療觀念的重點更接近：", options:["食得多","配合體質求平衡","補得最快","只靠藥物"], answer:1, explain:"強調整體觀與因人因時調整。" },
       { q:"以下哪個較符合「因時而食」？", options:["夏天多選清爽食物","四季同樣食法","只食肉","只食菜"], answer:0, explain:"季節影響身體感受與飲食選擇。" },
       { q:"食療觀念可反映中華文化的一種：", options:["科學實驗","整體觀與調和觀","偶然性","個人主義"], answer:1, explain:"較重視「平衡／調和」的思路。" },
     ],
-    // Level 10
     [
       { q:"「發酵」本質最貼近：", options:["加糖","微生物轉化產生風味","加熱","冷藏"], answer:1, explain:"微生物作用改變風味與質地。" },
       { q:"以下邊樣食品最依賴發酵？", options:["白飯","醬油","清湯","生果"], answer:1, explain:"醬油屬發酵製品。" },
       { q:"傳統食品技藝常見特點係：", options:["快速完成","需要時間與工序","無步驟","即食"], answer:1, explain:"不少傳統技藝講究時間、溫度與經驗。" },
       { q:"非遺飲食技藝的價值更接近：", options:["好睇","承傳知識與工藝","難學","價格高"], answer:1, explain:"重點係技術、文化與傳承。" },
     ],
-    // Level 11
     [
       { q:"中國菜多道同時上桌，常被解釋為反映：", options:["廚房細","分享與配搭平衡","上菜快","只為好睇"], answer:1, explain:"共享與配搭（冷熱、濃淡、葷素）常被強調。" },
       { q:"宴席菜式配搭常重視：", options:["同色","冷熱、荤素與濃淡平衡","全部一樣","全部新奇"], answer:1, explain:"配搭令口感與味型互相襯托。" },
       { q:"宴席座位與上菜次序可反映：", options:["隨意","社交秩序與禮節","浪費","麻煩"], answer:1, explain:"餐桌安排與人際規範密切相關。" },
       { q:"飲食文化與社會文化關係較合理係：", options:["無關","緊密相連","偶然","只係表面"], answer:1, explain:"飲食是社會互動的常見載體。" },
     ],
-    // Level 12
     [
       { q:"中西用餐模式常見分別之一係：", options:["用具","個人分餐 vs 同桌共享","味道","價錢"], answer:1, explain:"中菜更常見共享；西式較多個人份。" },
       { q:"中菜重視「夾餸」這類互動，較能反映：", options:["技巧","關係與人情","速度","規矩多"], answer:1, explain:"餐桌互動是人際關係的一部分。" },
       { q:"比較飲食文化較合理目的係：", options:["比較優劣","理解文化差異","嘲笑","排斥"], answer:1, explain:"比較是為理解多元，不是分高下。" },
       { q:"做飲食文化比較活動，最理想態度係：", options:["分高下","尊重與好奇","否定他人","只重自己"], answer:1, explain:"文化比較要避免優越感，強調理解。" },
     ],
-    // Level 13
     [
       { q:"港式奶茶常被視為反映：", options:["英式文化原封不動","在地改良與混合","完全外來","傳統流失"], answer:1, explain:"混合與改良，形成在地口味。" },
       { q:"茶餐廳菜單特色較接近：", options:["單一","多元混合","傳統單調","固定不變"], answer:1, explain:"多元選擇反映城市生活需求。" },
       { q:"香港飲食文化較常被形容為：", options:["停滯","流動與變化","封閉","排他"], answer:1, explain:"受人口流動與城市節奏影響，變化快。" },
       { q:"飲食能反映城市的：", options:["規模","性格與生活方式","面積","年齡"], answer:1, explain:"飲食場景反映城市節奏與社交方式。" },
     ],
-    // Level 14
     [
       { q:"為何「食」適合作文化教育切入點？", options:["易玩","貼近日常生活","成本低","時間短"], answer:1, explain:"學生有生活經驗，容易引發共鳴與討論。" },
       { q:"飲食文化容易傳承的原因之一係：", options:["人人參與","生活實踐性強","強制學習","只因考試"], answer:1, explain:"日常實踐使文化自然而然延續。" },
       { q:"飲食與記憶的關係較合理係：", options:["無關","緊密相連","偶然","只係表面"], answer:1, explain:"味道常觸發家庭與城市記憶。" },
       { q:"講食物故事最能幫助學生：", options:["記菜名","理解文化意義","學煮飯","只為娛樂"], answer:1, explain:"故事能把知識連結價值與背景。" },
     ],
-    // Level 15
     [
       { q:"「食」作為文化符號，最常被理解為承載：", options:["好味","身份認同","價值","習慣"], answer:1, explain:"飲食連結地域、家庭與群體身份。" },
       { q:"以一句概括中華飲食文化核心精神較接近：", options:["多","分享與平衡","快","新"], answer:1, explain:"共享與配搭平衡是常見核心。" },
@@ -598,37 +678,25 @@
     ],
   ];
 
-  // =========================
   // 獎金階梯（15關）
-  // =========================
-  const MONEY = [
-    100, 200, 300, 500, 1000,
-    2000, 3000, 5000, 8000, 10000,
-    20000, 30000, 50000, 80000, 100000
-  ];
-  const SAFE_LEVELS = new Set([5, 10]); // 5/10 關保底
+  const MONEY = [100,200,300,500,1000, 2000,3000,5000,8000,10000, 20000,30000,50000,80000,100000];
+  const SAFE_LEVELS = new Set([5,10]);
 
-  // =========================
   // 狀態
-  // =========================
   const state = {
     started:false,
-    level:0,           // 0..14
-    current:null,      // {q, options, answer, explain}
-    chosen:null,       // 0..3
+    level:0,
+    current:null,
+    chosen:null,
     locked:false,
-    phase:"idle",      // idle | question | result | ended
+    phase:"idle",
     earned:0,
     safeEarned:0,
-    used: { fifty:false, audience:false, expert:false },
-    removed: new Set(), // options removed by 50:50
-    audienceBars:null,
-    expertHint:null
+    used:{ fifty:false, audience:false, expert:false },
+    removed:new Set(),
   };
 
-  // =========================
   // DOM
-  // =========================
   const ui = {
     level: document.getElementById("uiLevel"),
     money: document.getElementById("uiMoney"),
@@ -652,48 +720,30 @@
     modalTitle: document.getElementById("modalTitle"),
     modalBody: document.getElementById("modalBody"),
     modalClose: document.getElementById("modalClose"),
+    btnMute: document.getElementById("btnMute"),
+    volBgm: document.getElementById("volBgm"),
+    volSfx: document.getElementById("volSfx"),
   };
 
-  // =========================
   // Utilities
-  // =========================
-  const clamp = (v,min,max)=>Math.max(min,Math.min(max,v));
   const formatMoney = (n)=>"HK$ " + n.toLocaleString("en-US");
-  function pickOne(arr){
-    return arr[(Math.random()*arr.length)|0];
-  }
-  function shuffle(a){
-    for(let i=a.length-1;i>0;i--){
-      const j=(Math.random()*(i+1))|0;
-      [a[i],a[j]]=[a[j],a[i]];
-    }
-    return a;
-  }
+  function pickOne(arr){ return arr[(Math.random()*arr.length)|0]; }
+  function shuffle(a){ for(let i=a.length-1;i>0;i--){ const j=(Math.random()*(i+1))|0; [a[i],a[j]]=[a[j],a[i]]; } return a; }
 
-  // =========================
-  // Ladder UI
-  // =========================
+  // Ladder
   function renderLadder(){
     ui.ladderList.innerHTML = "";
     for(let i=14;i>=0;i--){
-      const lvl = i+1;
-      const div = document.createElement("div");
-      div.className = "step" + (SAFE_LEVELS.has(lvl) ? " safe":"");
-      const n = document.createElement("div");
-      n.className="n";
-      n.textContent = `${lvl}`;
-      const amt = document.createElement("div");
-      amt.className="amt";
-      amt.textContent = formatMoney(MONEY[i]);
-      div.appendChild(n);
-      div.appendChild(amt);
+      const lvl=i+1;
+      const div=document.createElement("div");
+      div.className="step"+(SAFE_LEVELS.has(lvl)?" safe":"");
+      div.innerHTML = `<div class="n">${lvl}</div><div class="amt">${formatMoney(MONEY[i])}</div>`;
       ui.ladderList.appendChild(div);
     }
     syncLadderActive();
   }
   function syncLadderActive(){
-    const steps = [...ui.ladderList.children];
-    // steps are 15..1 (top->bottom)
+    const steps=[...ui.ladderList.children];
     const currentLevel = state.started ? (state.level+1) : 0;
     for(let idx=0; idx<steps.length; idx++){
       const lvl = 15-idx;
@@ -702,21 +752,59 @@
     }
   }
 
-  // =========================
   // Modal
-  // =========================
   function openModal(title, body){
     ui.modalTitle.textContent = title;
     ui.modalBody.innerHTML = body;
     ui.modalBack.style.display = "flex";
   }
-  function closeModal(){
-    ui.modalBack.style.display = "none";
+  function closeModal(){ ui.modalBack.style.display = "none"; }
+
+  // UI
+  function updateTop(){
+    const lvl = state.started ? (state.level+1) : 0;
+    ui.level.textContent = lvl ? String(lvl) : "-";
+    ui.money.textContent = state.started ? formatMoney(state.earned) : "-";
+    ui.safe.textContent = state.started ? formatMoney(state.safeEarned) : "-";
   }
 
-  // =========================
-  // Game Flow
-  // =========================
+  // Options
+  const LETTERS=["A","B","C","D"];
+  function renderOptions(opts, placeholder=false){
+    ui.answers.innerHTML="";
+    for(let i=0;i<4;i++){
+      const el=document.createElement("div");
+      el.className="opt"+(placeholder?" disabled":"");
+      el.dataset.idx=String(i);
+      el.innerHTML = `
+        <div class="letter">${LETTERS[i]}</div>
+        <div class="text">${placeholder? "": (opts[i]??"")}</div>
+      `;
+      if(!placeholder){
+        el.addEventListener("click", ()=>choose(i));
+      }else{
+        el.style.pointerEvents="none";
+      }
+      ui.answers.appendChild(el);
+    }
+  }
+  function setOptionClass(idx, cls){
+    const el=ui.answers.querySelector(\`.opt[data-idx="\${idx}"]\`);
+    if(el) el.classList.add(cls);
+  }
+  function disableOption(idx){
+    const el=ui.answers.querySelector(\`.opt[data-idx="\${idx}"]\`);
+    if(!el) return;
+    el.classList.add("disabled");
+    el.style.pointerEvents="none";
+    const t=el.querySelector(".text");
+    if(t) t.textContent="（已移除）";
+  }
+  function lockAllOptions(){
+    ui.answers.querySelectorAll(".opt").forEach(el=>el.style.pointerEvents="none");
+  }
+
+  // Game
   function resetGame(){
     state.started=false;
     state.level=0;
@@ -726,374 +814,296 @@
     state.phase="idle";
     state.earned=0;
     state.safeEarned=0;
-    state.used = { fifty:false, audience:false, expert:false };
-    state.removed = new Set();
-    state.audienceBars=null;
-    state.expertHint=null;
+    state.used={ fifty:false, audience:false, expert:false };
+    state.removed=new Set();
 
-    ui.btnNext.disabled = true;
-    ui.btn5050.disabled = true;
-    ui.btnAudience.disabled = true;
-    ui.btnExpert.disabled = true;
+    ui.btnNext.disabled=true;
+    ui.btn5050.disabled=true;
+    ui.btnAudience.disabled=true;
+    ui.btnExpert.disabled=true;
 
-    ui.state.textContent = "等待開始";
-    ui.q.textContent = "按「開始遊戲」進入第 1 關。";
-    ui.hint.textContent = "提示：投影使用時可按 F11 全螢幕；手機可直按選項。";
-    ui.pool.textContent = "-";
-    ui.toastMsg.textContent = "未開始";
-    ui.toastSub.textContent = "準備好就開始。";
-    renderOptions(["A","B","C","D"].map(x=>`${x}.`), true);
+    ui.state.textContent="等待開始";
+    ui.pool.textContent="-";
+    ui.q.textContent="按「開始遊戲」進入第 1 關。";
+    ui.hint.textContent="提示：首次播放會被瀏覽器限制，需要按一下按鈕（例如開始）才可播聲。";
+    ui.toastMsg.textContent="未開始";
+    ui.toastSub.textContent="準備好就開始。";
+    renderOptions(["","","",""], true);
 
     updateTop();
     syncLadderActive();
+
+    // reset audio
+    stopBgm();
+    applyVolumes();
   }
 
   function startGame(){
     if(state.started) return;
-    state.started = true;
-    state.level = 0;
-    state.earned = 0;
-    state.safeEarned = 0;
-    state.used = { fifty:false, audience:false, expert:false };
+    state.started=true;
+    state.level=0;
+    state.earned=0;
+    state.safeEarned=0;
+    state.used={ fifty:false, audience:false, expert:false };
+    // ✅ start bgm on user gesture
+    ensureBgmPlaying();
     nextQuestion();
   }
 
   function nextQuestion(){
-    state.phase = "question";
-    state.locked = false;
-    state.chosen = null;
-    state.removed = new Set();
-    state.audienceBars = null;
-    state.expertHint = null;
+    state.phase="question";
+    state.locked=false;
+    state.chosen=null;
+    state.removed=new Set();
 
-    // enable lifelines if not used
     ui.btn5050.disabled = state.used.fifty;
     ui.btnAudience.disabled = state.used.audience;
     ui.btnExpert.disabled = state.used.expert;
 
-    const pool = BANK[state.level];
-    state.current = pickOne(pool);
-
-    ui.state.textContent = "作答中";
-    ui.pool.textContent = `第 ${state.level+1} 關（4 題抽 1）`;
-    ui.q.textContent = state.current.q;
-    ui.hint.textContent = "按 1–4 作答（或點選選項）。";
-
-    ui.toastMsg.textContent = `第 ${state.level+1} 關：請作答`;
-    ui.toastSub.textContent = `獎金：${formatMoney(MONEY[state.level])}｜保底：第 5／10 關`;
-    ui.btnNext.disabled = true;
+    state.current = pickOne(BANK[state.level]);
+    ui.state.textContent="作答中";
+    ui.pool.textContent=`第 ${state.level+1} 關（4 題抽 1）`;
+    ui.q.textContent=state.current.q;
+    ui.hint.textContent="按 1–4 作答（或點選選項）。";
+    ui.toastMsg.textContent=`第 ${state.level+1} 關：請作答`;
+    ui.toastSub.textContent=`獎金：${formatMoney(MONEY[state.level])}｜保底：第 5／10 關`;
+    ui.btnNext.disabled=true;
 
     renderOptions(state.current.options, false);
     updateTop();
     syncLadderActive();
   }
 
-  function endGame(win){
-    state.phase = "ended";
-    ui.btnNext.disabled = true;
-    ui.btn5050.disabled = true;
-    ui.btnAudience.disabled = true;
-    ui.btnExpert.disabled = true;
+  function resolveAnswer(){
+    const correct=state.current.answer;
+    const chosen=state.chosen;
+    const isCorrect=chosen===correct;
 
-    if(win){
-      ui.state.textContent = "完成";
-      ui.toastMsg.textContent = "✅ 恭喜：通關（第 15 關完成）";
-      ui.toastSub.textContent = `最終獎金：${formatMoney(state.earned)}｜可按「開始遊戲」重玩（會重新抽題）`;
-      openModal("任務完成（文化周）",
-        `<p><b>你已完成 15 關。</b></p>
-         <p>提示：你可以把題庫改成「學科／班本」版本，之後每年文化周直接重用。</p>
-         <p>最終獎金：<b>${formatMoney(state.earned)}</b></p>`);
+    lockAllOptions();
+    setOptionClass(correct,"correct");
+    if(!isCorrect) setOptionClass(chosen,"wrong");
+
+    if(isCorrect){
+      playSfx(audio.ok);
+      state.earned = MONEY[state.level];
+      if(SAFE_LEVELS.has(state.level+1)) state.safeEarned = state.earned;
+      ui.toastMsg.textContent="✅ 答啱";
+      ui.toastSub.textContent=state.current.explain||"（解說）";
     }else{
-      ui.state.textContent = "結束";
-      ui.toastMsg.textContent = "❌ 答錯，遊戲結束";
-      ui.toastSub.textContent = `保底獎金：${formatMoney(state.safeEarned)}｜可按「開始遊戲」重玩（會重新抽題）`;
-      openModal("遊戲結束",
-        `<p><b>本次停留於第 ${state.level+1} 關。</b></p>
-         <p>保底獎金：<b>${formatMoney(state.safeEarned)}</b></p>
-         <p>建議：答題後由老師用「解說」延伸，令活動變成短討論。</p>`);
+      playSfx(audio.bad);
+      ui.toastMsg.textContent="❌ 答錯";
+      ui.toastSub.textContent=state.current.explain||"（解說）";
     }
+
+    ui.state.textContent="結果";
+    ui.btnNext.disabled=false;
+    state.phase="result";
 
     updateTop();
     syncLadderActive();
   }
 
-  function updateTop(){
-    const lvl = state.started ? (state.level+1) : 0;
-    ui.level.textContent = lvl ? String(lvl) : "-";
-    ui.money.textContent = state.started ? formatMoney(state.earned) : "-";
-    ui.safe.textContent = state.started ? formatMoney(state.safeEarned) : "-";
-  }
-
-  // =========================
-  // Rendering options
-  // =========================
-  const LETTERS = ["A","B","C","D"];
-
-  function renderOptions(opts, placeholder=false){
-    ui.answers.innerHTML = "";
-    for(let i=0;i<4;i++){
-      const opt = document.createElement("div");
-      opt.className = "opt";
-      opt.dataset.idx = String(i);
-
-      const l = document.createElement("div");
-      l.className = "letter";
-      l.textContent = LETTERS[i];
-
-      const t = document.createElement("div");
-      t.className = "text";
-      t.textContent = placeholder ? "" : (opts[i] ?? "");
-
-      opt.appendChild(l);
-      opt.appendChild(t);
-
-      if(placeholder){
-        opt.classList.add("disabled");
-      }else{
-        opt.addEventListener("click", () => choose(i));
-      }
-
-      ui.answers.appendChild(opt);
-    }
-  }
-
-  function setOptionState(idx, clsOn, clsOffList=[]){
-    const el = ui.answers.querySelector(`.opt[data-idx="${idx}"]`);
-    if(!el) return;
-    el.classList.add(clsOn);
-    for(const c of clsOffList) el.classList.remove(c);
-  }
-
-  function disableOption(idx){
-    const el = ui.answers.querySelector(`.opt[data-idx="${idx}"]`);
-    if(!el) return;
-    el.classList.add("disabled");
-    el.style.pointerEvents = "none";
-  }
-
-  function lockAllOptions(){
-    const els = ui.answers.querySelectorAll(".opt");
-    els.forEach(el=>{
-      el.style.pointerEvents = "none";
-    });
-  }
-
-  // =========================
-  // Answering
-  // =========================
   function choose(idx){
     if(!state.started || state.phase!=="question") return;
     if(state.locked) return;
     if(state.removed.has(idx)) return;
 
-    state.chosen = idx;
-    state.locked = true;
+    state.chosen=idx;
+    state.locked=true;
 
-    // UI mark selected
-    [...ui.answers.querySelectorAll(".opt")].forEach(el=>el.classList.remove("selected"));
-    setOptionState(idx, "selected");
+    ui.answers.querySelectorAll(".opt").forEach(el=>el.classList.remove("selected"));
+    const el=ui.answers.querySelector(\`.opt[data-idx="\${idx}"]\`);
+    if(el) el.classList.add("selected");
 
-    // resolve after short delay
-    setTimeout(resolveAnswer, 250);
+    setTimeout(resolveAnswer, 220);
   }
 
-  function resolveAnswer(){
-    if(state.phase!=="question") return;
-    const correct = state.current.answer;
-    lockAllOptions();
+  function endGame(win){
+    state.phase="ended";
+    ui.btnNext.disabled=true;
+    ui.btn5050.disabled=true;
+    ui.btnAudience.disabled=true;
+    ui.btnExpert.disabled=true;
 
-    const chosen = state.chosen;
-    const isCorrect = chosen === correct;
-
-    // mark correct/wrong
-    setOptionState(correct, "correct", ["selected"]);
-    if(!isCorrect){
-      setOptionState(chosen, "wrong", ["selected"]);
-    }
-
-    // update earned/safe
-    if(isCorrect){
-      state.earned = MONEY[state.level];
-      if(SAFE_LEVELS.has(state.level+1)) state.safeEarned = state.earned;
-
-      ui.toastMsg.textContent = "✅ 答啱";
-      ui.toastSub.textContent = state.current.explain || "（解說）";
-      ui.btnNext.disabled = false;
-      state.phase = "result";
+    if(win){
+      ui.state.textContent="完成";
+      ui.toastMsg.textContent="✅ 恭喜：通關（第 15 關完成）";
+      ui.toastSub.textContent=`最終獎金：${formatMoney(state.earned)}｜可按「開始遊戲」重玩（重新抽題）`;
+      openModal("完成",
+        `<p><b>你已完成 15 關。</b></p>
+         <p>最終獎金：<b>${formatMoney(state.earned)}</b></p>`);
     }else{
-      ui.toastMsg.textContent = "❌ 答錯";
-      ui.toastSub.textContent = state.current.explain || "（解說）";
-      ui.btnNext.disabled = false;
-      state.phase = "result";
+      ui.state.textContent="結束";
+      ui.toastMsg.textContent="❌ 答錯，遊戲結束";
+      ui.toastSub.textContent=`保底獎金：${formatMoney(state.safeEarned)}｜可按「開始遊戲」重玩（重新抽題）`;
+      openModal("遊戲結束",
+        `<p><b>本次停留於第 ${state.level+1} 關。</b></p>
+         <p>保底獎金：<b>${formatMoney(state.safeEarned)}</b></p>`);
     }
 
-    ui.state.textContent = "結果";
     updateTop();
     syncLadderActive();
   }
 
   function nextStep(){
-    if(!state.started) return;
-    if(state.phase!=="result") return;
-
+    if(!state.started || state.phase!=="result") return;
     const correct = state.current.answer;
-    const isCorrect = state.chosen === correct;
-
+    const isCorrect = state.chosen===correct;
     if(isCorrect){
-      if(state.level === 14){
-        endGame(true);
-        return;
-      }
-      state.level += 1;
+      if(state.level===14){ endGame(true); return; }
+      state.level+=1;
       nextQuestion();
     }else{
       endGame(false);
     }
   }
 
-  // =========================
   // Lifelines
-  // =========================
   function use5050(){
-    if(state.used.fifty) return;
-    if(state.phase!=="question") return;
-    state.used.fifty = true;
-    ui.btn5050.disabled = true;
+    if(state.used.fifty || state.phase!=="question") return;
+    state.used.fifty=true;
+    ui.btn5050.disabled=true;
 
-    const correct = state.current.answer;
-    const wrongs = [0,1,2,3].filter(i=>i!==correct && !state.removed.has(i));
+    const correct=state.current.answer;
+    const wrongs=[0,1,2,3].filter(i=>i!==correct);
     shuffle(wrongs);
-    const toRemove = wrongs.slice(0,2);
-    toRemove.forEach(i=>{
+    wrongs.slice(0,2).forEach(i=>{
       state.removed.add(i);
       disableOption(i);
-      const el = ui.answers.querySelector(`.opt[data-idx="${i}"] .text`);
-      if(el) el.textContent = "（已移除）";
     });
 
-    ui.toastMsg.textContent = "✂️ 50:50 已使用";
-    ui.toastSub.textContent = "已刪除兩個錯選項。";
+    ui.toastMsg.textContent="✂️ 50:50 已使用";
+    ui.toastSub.textContent="已刪除兩個錯選項。";
   }
 
   function useAudience(){
-    if(state.used.audience) return;
-    if(state.phase!=="question") return;
-    state.used.audience = true;
-    ui.btnAudience.disabled = true;
+    if(state.used.audience || state.phase!=="question") return;
+    state.used.audience=true;
+    ui.btnAudience.disabled=true;
 
-    const correct = state.current.answer;
-    // make a plausible poll: correct usually highest, but not always extreme
-    let base = [12, 12, 12, 12];
-    base[correct] = 40 + ((Math.random()*20)|0); // 40..59
-    // distribute remainder
-    let rem = 100 - base[correct];
-    const others = [0,1,2,3].filter(i=>i!==correct);
+    const correct=state.current.answer;
+    let base=[12,12,12,12];
+    base[correct]=40+((Math.random()*20)|0);
+
+    let rem=100-base[correct];
+    const others=[0,1,2,3].filter(i=>i!==correct);
     shuffle(others);
     for(let k=0;k<others.length;k++){
-      const i = others[k];
-      const v = (k===others.length-1) ? rem : (5 + ((Math.random()*(rem-5*(others.length-k)))|0));
-      base[i] = v;
-      rem -= v;
+      const i=others[k];
+      const v=(k===others.length-1)? rem : (5 + ((Math.random()*(rem-5*(others.length-k)))|0));
+      base[i]=v; rem-=v;
     }
-    // if 50:50 removed, zero out removed options and renormalize
-    const removed = [...state.removed];
-    if(removed.length){
-      removed.forEach(i=>base[i]=0);
-      const sum = base.reduce((a,b)=>a+b,0);
-      base = base.map(v=> sum ? Math.round(v*100/sum) : v);
-      // fix rounding to 100
-      let s = base.reduce((a,b)=>a+b,0);
-      while(s>100){
-        const i = base.findIndex(v=>v>0);
-        base[i]--; s--;
-      }
-      while(s<100){
-        base[correct]++; s++;
-      }
-    }
-    state.audienceBars = base;
 
-    const lines = base.map((p,i)=>`${LETTERS[i]}：${String(p).padStart(2," ")}%`).join("　");
-    ui.toastMsg.textContent = "📣 觀眾投票（模擬）";
-    ui.toastSub.textContent = lines;
+    // removed options => 0 then normalize
+    if(state.removed.size){
+      [...state.removed].forEach(i=>base[i]=0);
+      const sum=base.reduce((a,b)=>a+b,0);
+      base=base.map(v=>sum? Math.round(v*100/sum): v);
+      let s=base.reduce((a,b)=>a+b,0);
+      while(s>100){ const i=base.findIndex(v=>v>0); base[i]--; s--; }
+      while(s<100){ base[correct]++; s++; }
+    }
+
+    const line = base.map((p,i)=>`${LETTERS[i]}：${String(p).padStart(2," ")}%`).join("　");
+    ui.toastMsg.textContent="📣 觀眾投票（模擬）";
+    ui.toastSub.textContent=line;
   }
 
   function useExpert(){
-    if(state.used.expert) return;
-    if(state.phase!=="question") return;
-    state.used.expert = true;
-    ui.btnExpert.disabled = true;
+    if(state.used.expert || state.phase!=="question") return;
+    state.used.expert=true;
+    ui.btnExpert.disabled=true;
 
-    const correct = state.current.answer;
-    // expert reliability: ~75%
-    const reliable = Math.random() < 0.75;
+    const correct=state.current.answer;
+    const reliable=Math.random()<0.75;
     const pick = reliable ? correct : [0,1,2,3].filter(i=>i!==correct && !state.removed.has(i))[(Math.random()*3)|0];
 
-    state.expertHint = pick;
-    ui.toastMsg.textContent = "☎️ 文化達人提示";
-    ui.toastSub.textContent = `我傾向選 ${LETTERS[pick]}（理由：同「文化價值／生活情境」最吻合）。`;
+    ui.toastMsg.textContent="☎️ 文化達人提示";
+    ui.toastSub.textContent=`我傾向選 ${LETTERS[pick]}（理由：同「文化價值／生活情境」較吻合）。`;
   }
 
-  // =========================
-  // Rules / Help
-  // =========================
+  // Rules
   const RULES_HTML = `
-    <p><b>玩法：</b>共 15 關，每關會由 4 題中隨機抽 1 題；每題 4 個選項（A–D）。</p>
-    <p><b>作答：</b>鍵盤按 <b>1–4</b> 或直接點選選項。結果後按 <b>Enter</b>（或按「下一步」）繼續。</p>
-    <p><b>獎金：</b>答對即上升；<b>第 5 關／第 10 關</b>為保底點。</p>
-    <p><b>求助：</b>每局各一次：<b>50:50</b>、<b>問觀眾</b>（模擬百分比）、<b>問達人</b>（半可靠）。</p>
-    <p><b>老師用法：</b>每題都附一句「解說」，適合答後延伸 10–20 秒微討論。</p>
+    <p><b>玩法：</b>共 15 關，每關由 4 題中隨機抽 1 題；每題 4 個選項（A–D）。</p>
+    <p><b>作答：</b>鍵盤 <b>1–4</b> 或點選選項。結果後按 <b>Enter</b>（或「下一步」）繼續。</p>
+    <p><b>獎金：</b>答對上升；<b>第 5 關／第 10 關</b>為保底點。</p>
+    <p><b>求助：</b>每局各一次：50:50、問觀眾（模擬）、問達人（半可靠）。</p>
+    <p><b>聲音：</b>音檔放 repo：<code>assets/bgm.mp3</code>、<code>assets/correct.mp3</code>、<code>assets/wrong.mp3</code>。首次播放需按鍵解鎖。</p>
   `;
 
-  // =========================
-  // Events
-  // =========================
-  ui.btnStart.addEventListener("click", () => {
-    if(state.phase==="ended"){
-      resetGame();
+  // Audio UI events
+  function updateMuteBtn(){
+    ui.btnMute.textContent = audio.enabled ? "🔊 聲音：開" : "🔇 聲音：關";
+  }
+
+  ui.btnMute.addEventListener("click", async () => {
+    // user gesture => try unlock
+    await unlockAudio();
+    audio.enabled = !audio.enabled;
+    applyVolumes();
+    updateMuteBtn();
+    if(audio.enabled){
+      ensureBgmPlaying();
+      ui.toastMsg.textContent="🔊 已開啟聲音";
+      ui.toastSub.textContent="背景音樂會循環播放。";
+    }else{
+      stopBgm();
+      ui.toastMsg.textContent="🔇 已靜音";
+      ui.toastSub.textContent="背景音樂已停止。";
     }
+  });
+
+  ui.volBgm.addEventListener("input", () => {
+    audio.bgmVol = Number(ui.volBgm.value)/100;
+    applyVolumes();
+  });
+  ui.volSfx.addEventListener("input", () => {
+    audio.sfxVol = Number(ui.volSfx.value)/100;
+    applyVolumes();
+  });
+
+  // Other events
+  ui.btnStart.addEventListener("click", () => {
+    if(state.phase==="ended") resetGame();
     startGame();
   });
-
-  ui.btnReset.addEventListener("click", () => {
-    resetGame();
-  });
-
-  ui.btnRules.addEventListener("click", () => {
-    openModal("遊戲規則", RULES_HTML);
-  });
-
+  ui.btnReset.addEventListener("click", () => resetGame());
+  ui.btnRules.addEventListener("click", () => openModal("遊戲規則", RULES_HTML));
   ui.modalClose.addEventListener("click", closeModal);
-  ui.modalBack.addEventListener("click", (e) => {
-    if(e.target === ui.modalBack) closeModal();
-  });
-
+  ui.modalBack.addEventListener("click", (e)=>{ if(e.target===ui.modalBack) closeModal(); });
   ui.btnNext.addEventListener("click", () => nextStep());
-
   ui.btn5050.addEventListener("click", use5050);
   ui.btnAudience.addEventListener("click", useAudience);
   ui.btnExpert.addEventListener("click", useExpert);
 
-  window.addEventListener("keydown", (e) => {
-    const k = e.key;
-    if(k === "r" || k === "R"){
+  window.addEventListener("keydown", async (e) => {
+    // any keypress is a user gesture -> try unlock
+    if(!audio.unlocked) await unlockAudio();
+
+    const k=e.key;
+    if(k==="m"||k==="M"){
+      e.preventDefault();
+      ui.btnMute.click();
+      return;
+    }
+    if(k==="r"||k==="R"){
       e.preventDefault();
       resetGame();
       return;
     }
-    if(state.phase === "question"){
-      if(k === "1") { e.preventDefault(); choose(0); }
-      if(k === "2") { e.preventDefault(); choose(1); }
-      if(k === "3") { e.preventDefault(); choose(2); }
-      if(k === "4") { e.preventDefault(); choose(3); }
+    if(state.phase==="question"){
+      if(k==="1"){ e.preventDefault(); choose(0); }
+      if(k==="2"){ e.preventDefault(); choose(1); }
+      if(k==="3"){ e.preventDefault(); choose(2); }
+      if(k==="4"){ e.preventDefault(); choose(3); }
       return;
     }
-    if(state.phase === "result" && (k === "Enter" || k === " ")){
+    if(state.phase==="result" && (k==="Enter" || k===" ")){
       e.preventDefault();
       nextStep();
       return;
     }
-    if(!state.started && (k === "Enter" || k === " ")){
+    if(!state.started && (k==="Enter" || k===" ")){
       e.preventDefault();
       startGame();
       return;
@@ -1102,8 +1112,10 @@
 
   // init
   renderLadder();
-  resetGame();
-
+  updateMuteBtn();
+  renderOptions(["","","",""], true);
+  updateTop();
+  syncLadderActive();
 })();
 </script>
 </body>
